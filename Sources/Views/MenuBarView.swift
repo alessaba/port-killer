@@ -17,10 +17,13 @@ struct MenuBarView: View {
     @State private var hoveredPort: UUID?
 	@State private var expandedProcesses: Set<Int> = []
 	@State private var useTreeView = UserDefaults.standard.bool(forKey: "useTreeView")
-	
-	private var groupedByProcess: [ProcessGroup] {
+	@State private var cachedGroups: [ProcessGroup] = []
+
+	private var groupedByProcess: [ProcessGroup] { cachedGroups }
+
+	private func updateGroupedByProcess() {
 		let grouped = Dictionary(grouping: filteredPorts) { $0.pid }
-		return grouped.map { pid, ports in
+		cachedGroups = grouped.map { pid, ports in
 			ProcessGroup(
 				id: pid,
 				processName: ports.first?.processName ?? "Unknown",
@@ -92,37 +95,37 @@ struct MenuBarView: View {
             // Port List
             ScrollView {
                 LazyVStack(spacing: 0) {
-					if filteredPorts.isEmpty {
-						VStack(spacing: 8) {
-							Image(systemName: "checkmark.circle")
-								.font(.largeTitle)
-								.foregroundStyle(.green)
-							Text("No open ports")
-								.foregroundStyle(.secondary)
-						}
-						.frame(maxWidth: .infinity)
-						.padding(.vertical, 40)
-					} else if useTreeView {
-							ForEach(groupedByProcess) { group in
-								ProcessGroupRow(
-									group: group,
-									isExpanded: expandedProcesses.contains(group.id),
-									onToggleExpand: {
-										if expandedProcesses.contains(group.id) {
-											expandedProcesses.remove(group.id)
-										} else {
-											expandedProcesses.insert(group.id)
-										}
-									},
-									onKillProcess: {
-										for port in group.ports {
-											Task { await state.killPort(port) }
-										}
-									},
-									state: state
-								)
-							}
-					} else {
+                    if filteredPorts.isEmpty {
+                        VStack(spacing: 8) {
+                            Image(systemName: "checkmark.circle")
+                                .font(.largeTitle)
+                                .foregroundStyle(.green)
+                            Text("No open ports")
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 40)
+                    } else if useTreeView {
+                        ForEach(groupedByProcess) { group in
+                            ProcessGroupRow(
+                                group: group,
+                                isExpanded: expandedProcesses.contains(group.id),
+                                onToggleExpand: {
+                                    if expandedProcesses.contains(group.id) {
+                                        expandedProcesses.remove(group.id)
+                                    } else {
+                                        expandedProcesses.insert(group.id)
+                                    }
+                                },
+                                onKillProcess: {
+                                    for port in group.ports {
+                                        Task { await state.killPort(port) }
+                                    }
+                                },
+                                state: state
+                            )
+                        }
+                    } else {
                         ForEach(filteredPorts) { port in
                             PortRow(port: port, state: state, confirmingKill: $confirmingKillPort)
                         }
@@ -194,6 +197,9 @@ struct MenuBarView: View {
             .padding(.vertical, 4)
         }
         .frame(width: 300)
+        .onAppear { updateGroupedByProcess() }
+        .onChange(of: state.ports) { _, _ in updateGroupedByProcess() }
+        .onChange(of: searchText) { _, _ in updateGroupedByProcess() }
     }
 }
 

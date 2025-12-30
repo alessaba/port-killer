@@ -3,9 +3,21 @@
 # Build script for PortKiller.app
 set -e
 
+# Allow overriding architecture
+TARGET_ARCH=${1:-}
+ARCH_FLAG=""
+
+if [ -n "$TARGET_ARCH" ]; then
+    ARCH_FLAG="--arch $TARGET_ARCH"
+    echo "🏗️  Target Architecture: $TARGET_ARCH"
+    BUILD_DIR=".build/${TARGET_ARCH}-apple-macosx/release"
+else
+    BUILD_DIR=".build/release"
+fi
+
 APP_NAME="PortKiller"
 BUNDLE_ID="com.portkiller.app"
-BUILD_DIR=".build/release"
+# BUILD_DIR is defined above
 APP_DIR="$BUILD_DIR/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
@@ -13,7 +25,7 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 
 # First build to fetch dependencies
 echo "🔨 Building release binary (fetching dependencies)..."
-swift build -c release
+swift build -c release $ARCH_FLAG
 
 # Patch the CHECKOUT source files directly (not DerivedSources which gets regenerated)
 # This patches the actual library code before the final build
@@ -122,7 +134,7 @@ rm -f .build/*/release/PortKiller
 rm -rf .build/*/release/*.bundle
 
 echo "🔨 Building release binary with patched sources..."
-swift build -c release
+swift build -c release $ARCH_FLAG
 
 echo "📦 Creating app bundle..."
 rm -rf "$APP_DIR"

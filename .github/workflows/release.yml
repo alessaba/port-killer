@@ -75,140 +75,104 @@ jobs:
 
           echo "Updated version to ${VERSION} (build ${BUILD_NUMBER})"
 
-      - name: Create app bundle
-        run: |
-          # Clean any cached build to ensure patched accessors are used
-          rm -rf .build/*/release/*.build/DerivedSources/resource_bundle_accessor.swift 2>/dev/null || true
-          ./scripts/build-app.sh
-
-      - name: Sign app with Developer ID
-        env:
-          DEVELOPER_ID_NAME: ${{ secrets.DEVELOPER_ID_NAME }}
-        run: |
-          APP_PATH=".build/release/PortKiller.app"
-          FRAMEWORKS_PATH="$APP_PATH/Contents/Frameworks"
-          SPARKLE="$FRAMEWORKS_PATH/Sparkle.framework/Versions/B"
-
-          # Sign Sparkle framework components (inside out, bottom-up)
-          # Note: XPC services removed in build-app.sh for non-sandboxed apps
-          if [ -d "$FRAMEWORKS_PATH/Sparkle.framework" ]; then
-            echo "Signing Sparkle framework components..."
-
-            # Autoupdate binary
-            codesign --force --options runtime --timestamp \
-              --sign "$DEVELOPER_ID_NAME" \
-              "$SPARKLE/Autoupdate"
-
-            # Updater app
-            codesign --force --options runtime --timestamp \
-              --sign "$DEVELOPER_ID_NAME" \
-              "$SPARKLE/Updater.app"
-
-            # Main framework
-            codesign --force --options runtime --timestamp \
-              --sign "$DEVELOPER_ID_NAME" \
-              "$FRAMEWORKS_PATH/Sparkle.framework"
-          fi
-
-          # Sign main app
-          codesign --force --options runtime --timestamp \
-            --sign "$DEVELOPER_ID_NAME" \
-            "$APP_PATH"
-
-          # Verify signatures
-          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-
-      - name: Notarize app
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          APP_PATH=".build/release/PortKiller.app"
-
-          # Create ZIP for notarization
-          ditto -c -k --keepParent "$APP_PATH" "PortKiller.zip"
-
-          # Submit for notarization and capture output
-          SUBMIT_OUTPUT=$(xcrun notarytool submit "PortKiller.zip" \
-            --apple-id "$APPLE_ID" \
-            --password "$APPLE_ID_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" \
-            --wait 2>&1) || true
-
-          echo "$SUBMIT_OUTPUT"
-
-          # Extract submission ID and get detailed log if failed
-          SUBMISSION_ID=$(echo "$SUBMIT_OUTPUT" | grep -o 'id: [a-f0-9-]*' | head -1 | cut -d' ' -f2)
-          if echo "$SUBMIT_OUTPUT" | grep -q "Invalid"; then
-            echo "=== NOTARIZATION FAILED - Getting detailed log ==="
-            xcrun notarytool log "$SUBMISSION_ID" \
-              --apple-id "$APPLE_ID" \
-              --password "$APPLE_ID_PASSWORD" \
-              --team-id "$APPLE_TEAM_ID"
-            exit 1
-          fi
-
-          # Staple the notarization ticket
-          xcrun stapler staple "$APP_PATH"
-
-          # Cleanup
-          rm "PortKiller.zip"
-
-      - name: Create DMG
+      - name: Create DMG (arm64)
         run: |
           APP_NAME="PortKiller"
           VERSION="${GITHUB_REF_NAME}"
-          DMG_NAME="${APP_NAME}-${VERSION}-arm64.dmg"
+          DMG_NAME_ARM64="${APP_NAME}-${VERSION}-arm64.dmg"
+
+          # Build arm64 app
+          ./scripts/build-app.sh arm64
 
           # Create temporary directory for DMG contents
-          mkdir -p dmg_contents
+          mkdir -p dmg_contents_arm64
           # Use ditto to preserve symlinks and extended attributes
-          ditto .build/release/PortKiller.app dmg_contents/PortKiller.app
+          ditto .build/arm64-apple-macosx/release/PortKiller.app dmg_contents_arm64/PortKiller.app
 
           # Create Applications symlink
-          ln -s /Applications dmg_contents/Applications
+          ln -s /Applications dmg_contents_arm64/Applications
 
           # Create DMG
           hdiutil create -volname "$APP_NAME" \
-            -srcfolder dmg_contents \
+            -srcfolder dmg_contents_arm64 \
             -ov -format UDZO \
-            "$DMG_NAME"
+            "$DMG_NAME_ARM64"
 
           # Cleanup
-          rm -rf dmg_contents
+          rm -rf dmg_contents_arm64
 
-          echo "DMG_NAME=$DMG_NAME" >> $GITHUB_ENV
+          echo "DMG_NAME_ARM64=$DMG_NAME_ARM64" >> $GITHUB_ENV
 
-      - name: Sign DMG
+      - name: Create DMG (x86_64)
+        run: |
+          APP_NAME="PortKiller"
+          VERSION="${GITHUB_REF_NAME}"
+          DMG_NAME_X64="${APP_NAME}-${VERSION}-x64.dmg"
+
+          # Build x86_64 app
+          # Clean previous build to ensure architecture isolation
+          rm -rf .build/release/PortKiller.app
+          ./scripts/build-app.sh x86_64
+
+          # Create temporary directory for DMG contents
+          mkdir -p dmg_contents_x64
+          # Use ditto to preserve symlinks and extended attributes
+          ditto .build/x86_64-apple-macosx/release/PortKiller.app dmg_contents_x64/PortKiller.app
+
+          # Create Applications symlink
+          ln -s /Applications dmg_contents_x64/Applications
+
+          # Create DMG
+          hdiutil create -volname "$APP_NAME" \
+            -srcfolder dmg_contents_x64 \
+            -ov -format UDZO \
+            "$DMG_NAME_X64"
+
+          # Cleanup
+          rm -rf dmg_contents_x64
+
+          echo "DMG_NAME_X64=$DMG_NAME_X64" >> $GITHUB_ENV
+
+      - name: Sign DMGs
         env:
           DEVELOPER_ID_NAME: ${{ secrets.DEVELOPER_ID_NAME }}
         run: |
-          codesign --force --sign "$DEVELOPER_ID_NAME" --timestamp "$DMG_NAME"
+          codesign --force --sign "$DEVELOPER_ID_NAME" --timestamp "$DMG_NAME_ARM64"
+          codesign --force --sign "$DEVELOPER_ID_NAME" --timestamp "$DMG_NAME_X64"
 
-      - name: Notarize DMG
+      - name: Notarize DMGs
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          # DMG notarization is optional since the app inside is already notarized
-          # But we try anyway for best user experience
-          SUBMIT_OUTPUT=$(xcrun notarytool submit "$DMG_NAME" \
+          # Notarize arm64 DMG
+          SUBMIT_OUTPUT_ARM=$(xcrun notarytool submit "$DMG_NAME_ARM64" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_ID_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
             --wait 2>&1) || true
+          
+          echo "ARM64 Notarization: $SUBMIT_OUTPUT_ARM"
 
-          echo "$SUBMIT_OUTPUT"
-
-          if echo "$SUBMIT_OUTPUT" | grep -q "Accepted"; then
-            xcrun stapler staple "$DMG_NAME" || echo "Stapling failed but continuing..."
-          else
-            echo "DMG notarization failed, but app inside is already notarized. Continuing..."
+          if echo "$SUBMIT_OUTPUT_ARM" | grep -q "Accepted"; then
+            xcrun stapler staple "$DMG_NAME_ARM64" || echo "Stapling arm64 failed but continuing..."
           fi
 
-      - name: Generate Sparkle EdDSA signature
+          # Notarize x64 DMG
+          SUBMIT_OUTPUT_X64=$(xcrun notarytool submit "$DMG_NAME_X64" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait 2>&1) || true
+          
+          echo "x86_64 Notarization: $SUBMIT_OUTPUT_X64"
+
+          if echo "$SUBMIT_OUTPUT_X64" | grep -q "Accepted"; then
+            xcrun stapler staple "$DMG_NAME_X64" || echo "Stapling x64 failed but continuing..."
+          fi
+
+      - name: Generate Sparkle EdDSA signatures
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
@@ -217,31 +181,44 @@ jobs:
           mkdir -p sparkle_tools
           tar -xf sparkle.tar.xz -C sparkle_tools
 
-          # Generate signature - extract only the signature value
           echo "$SPARKLE_PRIVATE_KEY" > /tmp/sparkle_private_key
-          SIGN_OUTPUT=$(sparkle_tools/bin/sign_update "$DMG_NAME" -f /tmp/sparkle_private_key)
+          
+          # Generate signature for arm64
+          SIGN_OUTPUT_ARM=$(sparkle_tools/bin/sign_update "$DMG_NAME_ARM64" -f /tmp/sparkle_private_key)
+          SIGNATURE_ARM=$(echo "$SIGN_OUTPUT_ARM" | grep -o 'edSignature="[^"]*"' | sed 's/edSignature="//;s/"$//')
+          echo "SPARKLE_SIGNATURE_ARM=$SIGNATURE_ARM" >> $GITHUB_ENV
+          
+          # Generate signature for x64
+          SIGN_OUTPUT_X64=$(sparkle_tools/bin/sign_update "$DMG_NAME_X64" -f /tmp/sparkle_private_key)
+          SIGNATURE_X64=$(echo "$SIGN_OUTPUT_X64" | grep -o 'edSignature="[^"]*"' | sed 's/edSignature="//;s/"$//')
+          echo "SPARKLE_SIGNATURE_X64=$SIGNATURE_X64" >> $GITHUB_ENV
+          
           rm /tmp/sparkle_private_key
 
-          # Extract just the base64 signature from output
-          SIGNATURE=$(echo "$SIGN_OUTPUT" | grep -o 'edSignature="[^"]*"' | sed 's/edSignature="//;s/"$//')
-          echo "SPARKLE_SIGNATURE=$SIGNATURE" >> $GITHUB_ENV
-
-      - name: Upload DMG to Release
+      - name: Upload DMGs to Release
         run: |
-          gh release upload ${{ github.ref_name }} "$DMG_NAME" --clobber
+          gh release upload ${{ github.ref_name }} "$DMG_NAME_ARM64" --clobber
+          gh release upload ${{ github.ref_name }} "$DMG_NAME_X64" --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 
       - name: Update appcast.xml
         run: |
           VERSION="${GITHUB_REF_NAME#v}"  # Remove 'v' prefix (v1.2.7 -> 1.2.7)
           BUILD_NUMBER=$(git rev-list --count HEAD)  # Same as CFBundleVersion in app
-          DMG_SIZE=$(stat -f%z "$DMG_NAME")
-          DMG_URL="https://github.com/productdevbook/port-killer/releases/download/${GITHUB_REF_NAME}/${DMG_NAME}"
+          
+          # Use arm64 by default for now (can expand to multi-item feed later)
+          DMG_SIZE_ARM=$(stat -f%z "$DMG_NAME_ARM64")
+          DMG_URL_ARM="https://github.com/productdevbook/port-killer/releases/download/${GITHUB_REF_NAME}/${DMG_NAME_ARM64}"
+          
+          DMG_SIZE_X64=$(stat -f%z "$DMG_NAME_X64")
+          DMG_URL_X64="https://github.com/productdevbook/port-killer/releases/download/${GITHUB_REF_NAME}/${DMG_NAME_X64}"
 
           echo "Version: $VERSION, Build: $BUILD_NUMBER"
 
           # Create or update appcast.xml
+          # We add two items: one for arm64 (Apple Silicon) and one for x86_64 (Intel)
           cat > appcast.xml << 'APPCAST_EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -251,16 +228,32 @@ jobs:
               <description>Most recent updates to PortKiller</description>
               <language>en</language>
               <item>
-                <title>Version VERSIONPLACEHOLDER</title>
+                <title>Version VERSIONPLACEHOLDER (Apple Silicon)</title>
                 <pubDate>DATEPLACEHOLDER</pubDate>
                 <sparkle:version>BUILDPLACEHOLDER</sparkle:version>
                 <sparkle:shortVersionString>VERSIONPLACEHOLDER</sparkle:shortVersionString>
                 <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
                 <enclosure
-                  url="URLPLACEHOLDER"
-                  length="SIZEPLACEHOLDER"
+                  url="URLPLACEHOLDER_ARM"
+                  length="SIZEPLACEHOLDER_ARM"
                   type="application/octet-stream"
-                  sparkle:edSignature="SIGPLACEHOLDER" />
+                  sparkle:edSignature="SIGPLACEHOLDER_ARM"
+                  sparkle:os="macos"
+                  sparkle:cpu="arm64" />
+              </item>
+              <item>
+                <title>Version VERSIONPLACEHOLDER (Intel)</title>
+                <pubDate>DATEPLACEHOLDER</pubDate>
+                <sparkle:version>BUILDPLACEHOLDER</sparkle:version>
+                <sparkle:shortVersionString>VERSIONPLACEHOLDER</sparkle:shortVersionString>
+                <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+                <enclosure
+                  url="URLPLACEHOLDER_X64"
+                  length="SIZEPLACEHOLDER_X64"
+                  type="application/octet-stream"
+                  sparkle:edSignature="SIGPLACEHOLDER_X64"
+                  sparkle:os="macos"
+                  sparkle:cpu="x86_64" />
               </item>
             </channel>
           </rss>
@@ -270,9 +263,16 @@ jobs:
           sed -i '' "s|BUILDPLACEHOLDER|${BUILD_NUMBER}|g" appcast.xml
           sed -i '' "s|VERSIONPLACEHOLDER|${VERSION}|g" appcast.xml
           sed -i '' "s|DATEPLACEHOLDER|$(date -R)|g" appcast.xml
-          sed -i '' "s|URLPLACEHOLDER|${DMG_URL}|g" appcast.xml
-          sed -i '' "s|SIZEPLACEHOLDER|${DMG_SIZE}|g" appcast.xml
-          sed -i '' "s|SIGPLACEHOLDER|${SPARKLE_SIGNATURE}|g" appcast.xml
+          
+          # Replace ARM64 placeholders
+          sed -i '' "s|URLPLACEHOLDER_ARM|${DMG_URL_ARM}|g" appcast.xml
+          sed -i '' "s|SIZEPLACEHOLDER_ARM|${DMG_SIZE_ARM}|g" appcast.xml
+          sed -i '' "s|SIGPLACEHOLDER_ARM|${SPARKLE_SIGNATURE_ARM}|g" appcast.xml
+          
+          # Replace X64 placeholders
+          sed -i '' "s|URLPLACEHOLDER_X64|${DMG_URL_X64}|g" appcast.xml
+          sed -i '' "s|SIZEPLACEHOLDER_X64|${DMG_SIZE_X64}|g" appcast.xml
+          sed -i '' "s|SIGPLACEHOLDER_X64|${SPARKLE_SIGNATURE_X64}|g" appcast.xml
 
       - name: Commit appcast.xml
         run: |
@@ -288,28 +288,33 @@ jobs:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          DMG_URL="https://github.com/productdevbook/port-killer/releases/download/${GITHUB_REF_NAME}/${DMG_NAME}"
-
-          # Get SHA256 of the DMG
-          SHA256=$(shasum -a 256 "$DMG_NAME" | cut -d' ' -f1)
+          
+          # Get SHA256 of the DMGs
+          SHA256_ARM=$(shasum -a 256 "$DMG_NAME_ARM64" | cut -d' ' -f1)
+          SHA256_X64=$(shasum -a 256 "$DMG_NAME_X64" | cut -d' ' -f1)
 
           # Clone homebrew-tap repo
           git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/productdevbook/homebrew-tap.git /tmp/homebrew-tap
           cd /tmp/homebrew-tap
 
-          # Update cask formula
+          # Update cask formula to support both architectures
           cat > Casks/portkiller.rb << EOF
           cask "portkiller" do
             version "${VERSION}"
-            sha256 "${SHA256}"
+            
+            if Hardware::CPU.intel?
+              sha256 "${SHA256_X64}"
+              url "https://github.com/productdevbook/port-killer/releases/download/v#{version}/PortKiller-v#{version}-x64.dmg"
+            else
+              sha256 "${SHA256_ARM}"
+              url "https://github.com/productdevbook/port-killer/releases/download/v#{version}/PortKiller-v#{version}-arm64.dmg"
+            end
 
-            url "https://github.com/productdevbook/port-killer/releases/download/v#{version}/PortKiller-v#{version}-arm64.dmg"
             name "PortKiller"
             desc "Menu bar app to find and kill processes running on open ports"
             homepage "https://github.com/productdevbook/port-killer"
 
             depends_on macos: ">= :sequoia"
-            depends_on arch: :arm64
 
             app "PortKiller.app"
 

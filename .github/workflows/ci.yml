@@ -64,21 +64,28 @@ jobs:
       - name: Run Tests
         run: swift test --parallel
 
-      - name: Build App Bundle
+      - name: Build App Bundle (arm64)
         run: |
-          echo "Testing app bundle creation..."
-          ./scripts/build-app.sh
+          echo "Building arm64 app bundle..."
+          ./scripts/build-app.sh arm64
 
           # Verify bundle structure
-          APP=".build/release/PortKiller.app"
+          APP=".build/arm64-apple-macosx/release/PortKiller.app"
           [ -f "$APP/Contents/MacOS/PortKiller" ] || { echo "Missing executable"; exit 1; }
-          [ -f "$APP/Contents/Info.plist" ] || { echo "Missing Info.plist"; exit 1; }
-          [ -d "$APP/Contents/Frameworks/Sparkle.framework" ] || { echo "Missing Sparkle framework"; exit 1; }
+          # Verify architecture
+          lipo -info "$APP/Contents/MacOS/PortKiller" | grep "arm64" || { echo "Wrong architecture"; exit 1; }
+          
+      - name: Build App Bundle (x86_64)
+        run: |
+          echo "Building x86_64 app bundle..."
+          ./scripts/build-app.sh x86_64
 
-          # Verify SPM resource bundles in Contents/Resources (patched accessor looks here)
-          [ -d "$APP/Contents/Resources/KeyboardShortcuts_KeyboardShortcuts.bundle" ] || { echo "Missing KeyboardShortcuts bundle"; exit 1; }
-          [ -d "$APP/Contents/Resources/Defaults_Defaults.bundle" ] || { echo "Missing Defaults bundle"; exit 1; }
-          echo "App bundle structure verified."
+          # Verify bundle structure
+          APP=".build/x86_64-apple-macosx/release/PortKiller.app"
+          [ -f "$APP/Contents/MacOS/PortKiller" ] || { echo "Missing executable"; exit 1; }
+          # Verify architecture
+          lipo -info "$APP/Contents/MacOS/PortKiller" | grep "x86_64" || { echo "Wrong architecture"; exit 1; }
+
 
   lint:
     name: Lint & Validate

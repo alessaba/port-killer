@@ -14,12 +14,9 @@ CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 
-# Arch flags for Universal Binary
-ARCH_FLAGS="--arch arm64 --arch x86_64"
-
 # First build to fetch dependencies
 echo "🔨 Building release binary (fetching dependencies)..."
-swift build -c release $ARCH_FLAGS
+swift build -c release --arch arm64 --arch x86_64
 
 # Patch the CHECKOUT source files directly (not DerivedSources which gets regenerated)
 # This patches the actual library code before the final build
@@ -128,7 +125,7 @@ rm -f .build/*/release/PortKiller
 rm -rf .build/*/release/*.bundle
 
 echo "🔨 Building release binary with patched sources..."
-swift build -c release $ARCH_FLAGS
+swift build -c release --arch arm64 --arch x86_64
 
 echo "📦 Creating app bundle..."
 rm -rf "$APP_DIR"

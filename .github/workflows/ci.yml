@@ -64,27 +64,21 @@ jobs:
       - name: Run Tests
         run: swift test --parallel
 
-      - name: Build App Bundle (arm64)
+      - name: Build App Bundle (Universal)
         run: |
-          echo "Building arm64 app bundle..."
-          ./scripts/build-app.sh arm64
+          echo "Building Universal app bundle (arm64 + x86_64)..."
+          ./scripts/build-app.sh
 
           # Verify bundle structure
-          APP=".build/arm64-apple-macosx/release/PortKiller.app"
+          APP=".build/apple/Products/Release/PortKiller.app"
           [ -f "$APP/Contents/MacOS/PortKiller" ] || { echo "Missing executable"; exit 1; }
-          # Verify architecture
-          lipo -info "$APP/Contents/MacOS/PortKiller" | grep "arm64" || { echo "Wrong architecture"; exit 1; }
           
-      - name: Build App Bundle (x86_64)
-        run: |
-          echo "Building x86_64 app bundle..."
-          ./scripts/build-app.sh x86_64
+          # Verify architecture - must contain BOTH arm64 and x86_64
+          INFO=$(lipo -info "$APP/Contents/MacOS/PortKiller")
+          echo "Binary Info: $INFO"
+          echo "$INFO" | grep "arm64" || { echo "Missing arm64"; exit 1; }
+          echo "$INFO" | grep "x86_64" || { echo "Missing x86_64"; exit 1; }
 
-          # Verify bundle structure
-          APP=".build/x86_64-apple-macosx/release/PortKiller.app"
-          [ -f "$APP/Contents/MacOS/PortKiller" ] || { echo "Missing executable"; exit 1; }
-          # Verify architecture
-          lipo -info "$APP/Contents/MacOS/PortKiller" | grep "x86_64" || { echo "Wrong architecture"; exit 1; }
 
 
   lint:

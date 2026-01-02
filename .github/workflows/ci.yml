@@ -64,21 +64,28 @@ jobs:
       - name: Run Tests
         run: swift test --parallel
 
-      - name: Build App Bundle
+      - name: Build App Bundle (Universal)
         run: |
-          echo "Testing app bundle creation..."
+          echo "Building Universal app bundle (arm64 + x86_64)..."
           ./scripts/build-app.sh
 
           # Verify bundle structure
-          APP=".build/release/PortKiller.app"
+          APP=".build/apple/Products/Release/PortKiller.app"
           [ -f "$APP/Contents/MacOS/PortKiller" ] || { echo "Missing executable"; exit 1; }
           [ -f "$APP/Contents/Info.plist" ] || { echo "Missing Info.plist"; exit 1; }
           [ -d "$APP/Contents/Frameworks/Sparkle.framework" ] || { echo "Missing Sparkle framework"; exit 1; }
-
-          # Verify SPM resource bundles in Contents/Resources (patched accessor looks here)
+          
+          # Verify SPM resource bundles in Contents/Resources
           [ -d "$APP/Contents/Resources/KeyboardShortcuts_KeyboardShortcuts.bundle" ] || { echo "Missing KeyboardShortcuts bundle"; exit 1; }
           [ -d "$APP/Contents/Resources/Defaults_Defaults.bundle" ] || { echo "Missing Defaults bundle"; exit 1; }
-          echo "App bundle structure verified."
+
+          # Verify architecture - must contain BOTH arm64 and x86_64
+          INFO=$(lipo -info "$APP/Contents/MacOS/PortKiller")
+          echo "Binary Info: $INFO"
+          echo "$INFO" | grep "arm64" || { echo "Missing arm64"; exit 1; }
+          echo "$INFO" | grep "x86_64" || { echo "Missing x86_64"; exit 1; }
+
+
 
   lint:
     name: Lint & Validate

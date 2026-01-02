@@ -1,11 +1,14 @@
 #!/bin/bash
 
-# Build script for PortKiller.app
+# Build script for PortKiller.app (Universal Binary)
 set -e
 
 APP_NAME="PortKiller"
 BUNDLE_ID="com.portkiller.app"
-BUILD_DIR=".build/release"
+
+# Swift PM Universal Build Output Directory
+# When building for multiple architectures, SPM puts products in apple/Products/Release
+BUILD_DIR=".build/apple/Products/Release"
 APP_DIR="$BUILD_DIR/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
@@ -13,7 +16,7 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 
 # First build to fetch dependencies
 echo "🔨 Building release binary (fetching dependencies)..."
-swift build -c release
+swift build -c release --arch arm64 --arch x86_64
 
 # Patch the CHECKOUT source files directly (not DerivedSources which gets regenerated)
 # This patches the actual library code before the final build
@@ -122,7 +125,7 @@ rm -f .build/*/release/PortKiller
 rm -rf .build/*/release/*.bundle
 
 echo "🔨 Building release binary with patched sources..."
-swift build -c release
+swift build -c release --arch arm64 --arch x86_64
 
 echo "📦 Creating app bundle..."
 rm -rf "$APP_DIR"

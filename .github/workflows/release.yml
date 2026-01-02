@@ -75,17 +75,15 @@ jobs:
 
           echo "Updated version to ${VERSION} (build ${BUILD_NUMBER})"
 
-      - name: Create app bundle
+      - name: Build app bundle
         run: |
-          # Clean any cached build to ensure patched accessors are used
-          rm -rf .build/*/release/*.build/DerivedSources/resource_bundle_accessor.swift 2>/dev/null || true
-          ./scripts/build-app.sh
-
+          # Build the PortKiller macOS app in Release configuration
+          swift build --configuration release --product PortKiller
       - name: Sign app with Developer ID
         env:
           DEVELOPER_ID_NAME: ${{ secrets.DEVELOPER_ID_NAME }}
         run: |
-          APP_PATH=".build/release/PortKiller.app"
+          APP_PATH=".build/apple/Products/Release/PortKiller.app"
           FRAMEWORKS_PATH="$APP_PATH/Contents/Frameworks"
           SPARKLE="$FRAMEWORKS_PATH/Sparkle.framework/Versions/B"
 
@@ -124,7 +122,7 @@ jobs:
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          APP_PATH=".build/release/PortKiller.app"
+          APP_PATH=".build/apple/Products/Release/PortKiller.app"
 
           # Create ZIP for notarization
           ditto -c -k --keepParent "$APP_PATH" "PortKiller.zip"
@@ -159,12 +157,12 @@ jobs:
         run: |
           APP_NAME="PortKiller"
           VERSION="${GITHUB_REF_NAME}"
-          DMG_NAME="${APP_NAME}-${VERSION}-macos-arm64.dmg"
+          DMG_NAME="${APP_NAME}-${VERSION}.dmg"
 
           # Create temporary directory for DMG contents
           mkdir -p dmg_contents
           # Use ditto to preserve symlinks and extended attributes
-          ditto .build/release/PortKiller.app dmg_contents/PortKiller.app
+          ditto .build/apple/Products/Release/PortKiller.app dmg_contents/PortKiller.app
 
           # Create Applications symlink
           ln -s /Applications dmg_contents/Applications
@@ -192,20 +190,17 @@ jobs:
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          # DMG notarization is optional since the app inside is already notarized
-          # But we try anyway for best user experience
+          # Notarize DMG
           SUBMIT_OUTPUT=$(xcrun notarytool submit "$DMG_NAME" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_ID_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
             --wait 2>&1) || true
-
-          echo "$SUBMIT_OUTPUT"
+          
+          echo "Notarization Output: $SUBMIT_OUTPUT"
 
           if echo "$SUBMIT_OUTPUT" | grep -q "Accepted"; then
             xcrun stapler staple "$DMG_NAME" || echo "Stapling failed but continuing..."
-          else
-            echo "DMG notarization failed, but app inside is already notarized. Continuing..."
           fi
 
       - name: Generate Sparkle EdDSA signature
@@ -217,20 +212,22 @@ jobs:
           mkdir -p sparkle_tools
           tar -xf sparkle.tar.xz -C sparkle_tools
 
-          # Generate signature - extract only the signature value
           echo "$SPARKLE_PRIVATE_KEY" > /tmp/sparkle_private_key
+          
+          # Generate signature
           SIGN_OUTPUT=$(sparkle_tools/bin/sign_update "$DMG_NAME" -f /tmp/sparkle_private_key)
-          rm /tmp/sparkle_private_key
-
-          # Extract just the base64 signature from output
           SIGNATURE=$(echo "$SIGN_OUTPUT" | grep -o 'edSignature="[^"]*"' | sed 's/edSignature="//;s/"$//')
           echo "SPARKLE_SIGNATURE=$SIGNATURE" >> $GITHUB_ENV
+          
+          rm /tmp/sparkle_private_key
 
       - name: Upload DMG to Release
         run: |
           gh release upload ${{ github.ref_name }} "$DMG_NAME" --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
 
       - name: Update appcast.xml
         run: |
@@ -288,9 +285,8 @@ jobs:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          DMG_URL="https://github.com/productdevbook/port-killer/releases/download/${GITHUB_REF_NAME}/${DMG_NAME}"
-
-          # Get SHA256 of the DMG
+          
+          # Get SHA256 of the Universal DMG
           SHA256=$(shasum -a 256 "$DMG_NAME" | cut -d' ' -f1)
 
           # Clone homebrew-tap repo
@@ -302,14 +298,14 @@ jobs:
           cask "portkiller" do
             version "${VERSION}"
             sha256 "${SHA256}"
+            
+            url "https://github.com/productdevbook/port-killer/releases/download/v#{version}/PortKiller-v#{version}.dmg"
 
-            url "https://github.com/productdevbook/port-killer/releases/download/v#{version}/PortKiller-v#{version}-macos-arm64.dmg"
             name "PortKiller"
             desc "Menu bar app to find and kill processes running on open ports"
             homepage "https://github.com/productdevbook/port-killer"
 
             depends_on macos: ">= :sequoia"
-            depends_on arch: :arm64
 
             app "PortKiller.app"
 

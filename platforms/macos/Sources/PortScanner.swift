@@ -52,6 +52,7 @@ actor PortScanner {
             let commands = await getProcessCommands()
             return parseLsofOutput(output, commands: commands)
         } catch {
+            print("[PortScanner] Failed to scan ports: \(error.localizedDescription)")
             return []
         }
     }
@@ -106,6 +107,7 @@ actor PortScanner {
 
             return commands
         } catch {
+            print("[PortScanner] Failed to get process commands: \(error.localizedDescription)")
             return [:]
         }
     }
@@ -130,7 +132,7 @@ actor PortScanner {
      * @param commands - Dictionary of PID to full command string from ps
      * @returns Array of unique PortInfo objects, sorted by port number
      */
-    private func parseLsofOutput(_ output: String, commands: [Int: String]) -> [PortInfo] {
+    nonisolated private func parseLsofOutput(_ output: String, commands: [Int: String]) -> [PortInfo] {
         var ports: [PortInfo] = []
         var seen: Set<String> = []
         let lines = output.components(separatedBy: .newlines)
@@ -208,7 +210,7 @@ actor PortScanner {
      * @param fd - File descriptor number
      * @returns PortInfo object or nil if parsing fails
      */
-    private func parseAddress(_ address: String, processName: String, pid: Int, user: String, command: String, fd: String) -> PortInfo? {
+    nonisolated private func parseAddress(_ address: String, processName: String, pid: Int, user: String, command: String, fd: String) -> PortInfo? {
         let parts: [String]
 
         if address.hasPrefix("[") {

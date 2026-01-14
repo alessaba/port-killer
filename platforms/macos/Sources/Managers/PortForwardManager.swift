@@ -32,6 +32,22 @@ final class PortForwardManager {
         connections.filter(\.isFullyConnected).count
     }
 
+    // MARK: - Helper Methods
+
+    /// Finds a connection state by its ID
+    /// - Parameter id: The UUID of the connection to find
+    /// - Returns: The connection state if found, nil otherwise
+    func connection(for id: UUID) -> PortForwardConnectionState? {
+        connections.first { $0.id == id }
+    }
+
+    /// Finds the index of a connection by its ID
+    /// - Parameter id: The UUID of the connection to find
+    /// - Returns: The index if found, nil otherwise
+    func connectionIndex(for id: UUID) -> Int? {
+        connections.firstIndex { $0.id == id }
+    }
+
     init() {
         loadConnections()
     }
@@ -55,14 +71,14 @@ final class PortForwardManager {
     }
 
     func removeConnection(_ id: UUID) {
-        guard let index = connections.firstIndex(where: { $0.id == id }) else { return }
+        guard let index = connectionIndex(for: id) else { return }
         stopConnection(id)
         connections.remove(at: index)
         saveConnections()
     }
 
     func updateConnection(_ config: PortForwardConnectionConfig) {
-        guard let index = connections.firstIndex(where: { $0.id == config.id }) else { return }
+        guard let index = connectionIndex(for: config.id) else { return }
         let wasConnected = connections[index].isFullyConnected
         if wasConnected {
             stopConnection(config.id)
@@ -117,22 +133,31 @@ final class PortForwardManager {
 
     func startConnection(_ id: UUID) {
         guard !isKillingProcesses else { return }
-        guard let state = connections.first(where: { $0.id == id }) else { return }
+        guard let state = connection(for: id) else { return }
         let config = state.config
 
         // Reset intentional stop flag when starting
         state.isIntentionallyStopped = false
 
-        Task {
-            await processManager.setLogHandler(for: id) { [weak state] message, type, isError in
+        state.portForwardStatus = .connecting
+
+        // Set up handlers and start port forward in a single task to ensure proper ordering
+        state.portForwardTask = Task { [weak self, weak state] in
+            guard let self = self, let state = state else { return }
+
+            // Set log handler with proper weak capture
+            let logHandler: LogHandler = { [weak state] message, type, isError in
+                guard let state = state else { return }
                 Task { @MainActor in
-                    state?.appendLog(message, type: type, isError: isError)
+                    state.appendLog(message, type: type, isError: isError)
                 }
             }
+            await self.processManager.setLogHandler(for: id, handler: logHandler)
 
-            await processManager.setPortConflictHandler(for: id) { [weak self, weak state] port in
+            // Set port conflict handler with proper weak capture
+            let conflictHandler: PortConflictHandler = { [weak self, weak state] port in
+                guard let self = self, let state = state else { return }
                 Task { @MainActor in
-                    guard let self = self, let state = state else { return }
                     state.appendLog("Port \(port) in use, auto-recovering...", type: .portForward, isError: false)
 
                     await self.processManager.killProcessOnPort(port)
@@ -143,16 +168,14 @@ final class PortForwardManager {
                     self.restartConnection(id)
                 }
             }
-        }
+            await self.processManager.setPortConflictHandler(for: id, handler: conflictHandler)
 
-        state.portForwardStatus = .connecting
-        state.portForwardTask = Task {
-            await runPortForward(for: state, config: config)
+            await self.runPortForward(for: state, config: config)
         }
     }
 
     func stopConnection(_ id: UUID) {
-        guard let state = connections.first(where: { $0.id == id }) else { return }
+        guard let state = connection(for: id) else { return }
 
         // Mark as intentionally stopped to avoid disconnect notification
         state.isIntentionallyStopped = true

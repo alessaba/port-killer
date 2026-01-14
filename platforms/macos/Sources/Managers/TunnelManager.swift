@@ -21,6 +21,9 @@ final class TunnelManager {
     /// Cached installation status (observable for UI updates)
     private(set) var isCloudflaredInstalled: Bool = false
 
+    /// Task for cleaning up orphaned tunnels from previous sessions
+    private var cleanupTask: Task<Void, Never>?
+
     // MARK: - Initialization
 
     init() {
@@ -28,7 +31,7 @@ final class TunnelManager {
         isCloudflaredInstalled = cloudflaredService.isInstalled
 
         // Clean up any orphaned tunnel processes from previous crashed sessions
-        Task {
+        cleanupTask = Task {
             await cleanupOrphanedTunnels()
         }
     }
@@ -61,6 +64,15 @@ final class TunnelManager {
     ///   - port: The local port to expose
     ///   - portInfoId: Optional reference to the PortInfo this tunnel is for
     func startTunnel(for port: Int, portInfoId: UUID? = nil) {
+        // Ensure cleanup has completed before starting new tunnels
+        Task {
+            await cleanupTask?.value
+            await _startTunnelImpl(for: port, portInfoId: portInfoId)
+        }
+    }
+
+    /// Internal implementation of startTunnel after cleanup is complete
+    private func _startTunnelImpl(for port: Int, portInfoId: UUID? = nil) async {
         // Check if tunnel already exists for this port
         if let existing = tunnels.first(where: { $0.port == port && $0.status != .error }) {
             // Already tunneling this port - just copy the URL if available
@@ -75,10 +87,13 @@ final class TunnelManager {
 
         state.status = .starting
 
-        Task {
-            await cloudflaredService.setURLHandler(for: state.id) { [weak self, weak state] url in
+        Task { [weak self, weak state] in
+            guard let self = self, let state = state else { return }
+
+            // Set URL handler with proper weak capture
+            let urlHandler: @Sendable (String) -> Void = { [weak self, weak state] url in
+                guard let state = state else { return }
                 Task { @MainActor in
-                    guard let state = state else { return }
                     state.tunnelURL = url
                     state.status = .active
                     state.startTime = Date()
@@ -93,30 +108,37 @@ final class TunnelManager {
                     )
                 }
             }
+            await self.cloudflaredService.setURLHandler(for: state.id, handler: urlHandler)
 
-            await cloudflaredService.setErrorHandler(for: state.id) { [weak state] error in
+            // Set error handler with proper weak capture
+            let errorHandler: @Sendable (String) -> Void = { [weak state] error in
+                guard let state = state else { return }
                 Task { @MainActor in
-                    guard let state = state else { return }
                     state.lastError = error
                     if state.status != .active {
                         state.status = .error
                     }
                 }
             }
+            await self.cloudflaredService.setErrorHandler(for: state.id, handler: errorHandler)
 
             do {
-                let process = try await cloudflaredService.startTunnel(id: state.id, port: port)
+                let process = try await self.cloudflaredService.startTunnel(id: state.id, port: port)
 
                 // Wait a bit to see if process starts successfully
                 try? await Task.sleep(for: .seconds(3))
 
                 if !process.isRunning && state.status != .active {
-                    state.status = .error
-                    state.lastError = "Process terminated unexpectedly"
+                    await MainActor.run {
+                        state.status = .error
+                        state.lastError = "Process terminated unexpectedly"
+                    }
                 }
             } catch {
-                state.status = .error
-                state.lastError = error.localizedDescription
+                await MainActor.run {
+                    state.status = .error
+                    state.lastError = error.localizedDescription
+                }
             }
         }
     }

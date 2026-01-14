@@ -6,7 +6,9 @@ extension AppState {
     /// Sets up global keyboard shortcuts.
     func setupKeyboardShortcuts() {
         KeyboardShortcuts.onKeyUp(for: .toggleMainWindow) { [weak self] in
-            Task { @MainActor in
+            // KeyboardShortcuts callbacks run on the main thread, so we can use assumeIsolated
+            // This avoids creating a detached Task that outlives the callback context
+            MainActor.assumeIsolated {
                 self?.toggleMainWindow()
             }
         }

@@ -115,8 +115,10 @@ final class UpdateManager {
             .store(in: &cancellables)
     }
 
-    /// Storage for Combine cancellables
-    @ObservationIgnored private var cancellables: Set<AnyCancellable> = []
+    /// Storage for Combine cancellables.
+    /// Note: These subscriptions live for the app's lifetime alongside the UpdateManager,
+    /// so cleanup in deinit is not necessary. The subscriptions are intentionally retained.
+    @ObservationIgnored private var cancellables = Set<AnyCancellable>()
 
     // MARK: - Public Methods
 

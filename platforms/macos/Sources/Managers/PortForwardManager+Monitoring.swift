@@ -22,7 +22,9 @@ extension PortForwardManager {
     /// Checks all connections and reconnects if needed.
     func checkConnections() async {
         guard !isKillingProcesses else { return }
-        for state in connections {
+        // Take a snapshot to avoid data race during iteration
+        let snapshot = connections
+        for state in snapshot {
             guard state.config.isEnabled && state.config.autoReconnect else { continue }
 
             if state.config.useDirectExec, state.config.proxyPort != nil {
@@ -45,7 +47,7 @@ extension PortForwardManager {
             // Reconnect on error
             if state.portForwardStatus == .connected && hasError {
                 let wasConnected = state.isFullyConnected
-                state.lastError = "kubectl error"
+                state.lastError = "kubectl port-forward error on port \(localPort)"
                 state.portForwardStatus = .disconnected
                 state.proxyStatus = .disconnected
                 if wasConnected {
@@ -128,7 +130,7 @@ extension PortForwardManager {
 
         if state.proxyStatus == .connected && hasError {
             let wasConnected = state.isFullyConnected
-            state.lastError = "Proxy error"
+            state.lastError = "Proxy error on port \(state.config.proxyPort ?? 0)"
             state.portForwardStatus = .disconnected
             state.proxyStatus = .disconnected
             if wasConnected {

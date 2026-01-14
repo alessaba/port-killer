@@ -36,30 +36,33 @@ actor PortForwardProcessManager {
         let task = Task { [weak self] in
             let handle = pipe.fileHandleForReading
 
-            while true {
-                let data = handle.availableData
-                if data.isEmpty { break }
+            // Use async bytes stream for non-blocking read
+            // This avoids potential deadlock from blocking availableData calls
+            do {
+                for try await line in handle.bytes.lines {
+                    guard !Task.isCancelled else { break }
 
-                if let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty {
-                    let lines = output.components(separatedBy: .newlines)
-                    for line in lines where !line.isEmpty {
-                        let isError = PortForwardOutputParser.isErrorLine(line)
+                    let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmedLine.isEmpty else { continue }
 
-                        if isError {
-                            await self?.markConnectionError(id: id)
-                        }
+                    let isError = PortForwardOutputParser.isErrorLine(trimmedLine)
 
-                        if let port = PortForwardOutputParser.detectPortConflict(in: line) {
-                            if let handler = await self?.portConflictHandlers[id] {
-                                handler(port)
-                            }
-                        }
+                    if isError {
+                        await self?.markConnectionError(id: id)
+                    }
 
-                        if let handler = await self?.logHandlers[id] {
-                            handler(line, type, isError)
+                    if let port = PortForwardOutputParser.detectPortConflict(in: trimmedLine) {
+                        if let handler = await self?.portConflictHandlers[id] {
+                            handler(port)
                         }
                     }
+
+                    if let handler = await self?.logHandlers[id] {
+                        handler(trimmedLine, type, isError)
+                    }
                 }
+            } catch {
+                // Stream ended or was cancelled - this is expected when process terminates
             }
         }
 
